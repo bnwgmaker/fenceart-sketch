@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>펜스아트클립</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body { font-family: sans-serif; background: #f5f5f5; overflow-x: hidden; }
+#app { display: flex; flex-direction: column; height: 100dvh; }
+
+#topbar { background:#fff; border-bottom:1px solid #ddd; padding:8px 12px; display:flex; align-items:center; gap:8px; flex-shrink:0; flex-wrap:wrap; }
+#topbar select { font-size:12px; padding:6px 8px; border-radius:6px; border:1px solid #ccc; background:#fff; flex:1; min-width:0; }
+.icon-btn { min-width:36px; height:36px; border-radius:8px; border:1px solid #ccc; background:#fff; display:flex; align-items:center; justify-content:center; font-size:15px; cursor:pointer; flex-shrink:0; padding:0 8px; white-space:nowrap; }
+.icon-btn.active { background:#212121; color:#fff; border-color:#212121; }
+.icon-btn.dl { background:#212121; color:#fff; border-color:#212121; font-size:13px; }
+
+#palette-bar { background:#fff; border-bottom:1px solid #ddd; padding:8px 12px; display:flex; gap:8px; align-items:center; overflow-x:auto; flex-shrink:0; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+#palette-bar::-webkit-scrollbar { display:none; }
+.color-btn { width:34px; height:34px; border-radius:50%; border:3px solid transparent; cursor:pointer; flex-shrink:0; transition:transform 0.1s; }
+.color-btn.active { border-color:#111; transform:scale(1.15); }
+
+/* custom color in palette bar */
+#custom-swatch-wrap { display:flex; align-items:center; gap:5px; border:1px solid #ccc; border-radius:20px; padding:3px 10px 3px 4px; background:#fff; flex-shrink:0; }
+#custom-swatch { width:28px; height:28px; border-radius:50%; border:1px solid #ccc; flex-shrink:0; cursor:pointer; }
+#custom-color-input { display:none; }
+#hex-input { width:72px; font-size:12px; border:none; outline:none; font-family:monospace; color:#111; background:transparent; }
+
+#grid-wrap { flex:1; overflow:auto; -webkit-overflow-scrolling:touch; background:#fff; touch-action:pan-x pan-y; }
+#grid-wrap.drawing { touch-action:none; }
+
+table { border-collapse:collapse; table-layout:fixed; }
+th.corner, th.col-header { font-size:8px; font-weight:600; color:#555; background:#e8e8e8; border:1px solid #888; text-align:center; padding:0; position:sticky; top:0; z-index:2; }
+th.corner { position:sticky; left:0; z-index:3; }
+td.row-header { font-size:8px; font-weight:600; color:#555; background:#e8e8e8; text-align:center; padding:0; vertical-align:middle; position:sticky; left:0; z-index:1; }
+td.cell-td { padding:0; }
+.clip-cell { display:block; }
+
+#bottom-bar { background:#fff; border-top:1px solid #ddd; padding:6px 12px; font-size:11px; color:#555; display:flex; gap:10px; flex-wrap:wrap; align-items:center; flex-shrink:0; min-height:36px; }
+.count-item { display:flex; align-items:center; gap:3px; }
+.count-dot { width:10px; height:10px; border-radius:2px; border:1px solid rgba(0,0,0,0.1); flex-shrink:0; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="topbar">
+    <select id="size-select">
+      <option value="41,24">2000×1800 — 41열 × A~X</option>
+      <option value="41,20" selected>2000×1500 — 41열 × A~T</option>
+      <option value="18,20">1000×1500 — 18열 × A~T</option>
+    </select>
+    <div class="icon-btn" id="eraser-btn">✏️</div>
+    <div class="icon-btn" id="clear-btn">🗑</div>
+    <div class="icon-btn dl" id="download-btn">⬇ JPG</div>
+  </div>
+
+  <div id="palette-bar">
+    <div id="palette"></div>
+    <div id="custom-swatch-wrap" title="직접 색상 선택/입력">
+      <div id="custom-swatch" style="background:#E53935;"></div>
+      <input type="color" id="custom-color-input" value="#e53935">
+      <input type="text" id="hex-input" value="#E53935" maxlength="7" spellcheck="false" placeholder="#000000">
+    </div>
+  </div>
+
+  <div id="grid-wrap"><table id="grid"></table></div>
+  <div id="bottom-bar"><span style="color:#aaa;">셀을 터치해서 색칠하세요</span></div>
+
+</div>
+<script>
+const COLORS = [
+  {name:'빨강',hex:'#E53935'},{name:'주황',hex:'#FB8C00'},{name:'노랑',hex:'#FDD835'},
+  {name:'초록',hex:'#43A047'},{name:'파랑',hex:'#1E88E5'},{name:'남색',hex:'#283593'},
+  {name:'보라',hex:'#8E24AA'},{name:'흰색',hex:'#FFFFFF'},{name:'검정',hex:'#212121'},
+  {name:'회색',hex:'#9E9E9E'},{name:'갈색',hex:'#6D4C41'},{name:'분홍',hex:'#F06292'},
+];
+const CELL_W=28,CELL_H=42,SOLID='#888888',DASHED='#bbbbbb';
+const ALPHA='ABCDEFGHIJKLMNOPQRSTUVWX',HEADER_W=18,HEADER_H=16,SCALE=2;
+let selectedColor=COLORS[0].hex,erasing=false,painting=false,cols=41,totalRows=20,gridData=[];
+
+function initData(){gridData=[];for(let r=0;r<totalRows;r++)gridData[r]=new Array(cols).fill('');}
+
+// preset palette
+const paletteEl=document.getElementById('palette');
+paletteEl.style.cssText='display:flex;gap:8px;align-items:center;';
+COLORS.forEach(c=>{
+  const btn=document.createElement('div');
+  btn.className='color-btn'+(c.hex===selectedColor?' active':'');
+  btn.style.background=c.hex;
+  if(c.hex==='#FFFFFF')btn.style.boxShadow='0 0 0 1px #ccc inset';
+  btn.title=c.name;
+  btn.addEventListener('click',()=>selectColor(c.hex,btn));
+  paletteEl.appendChild(btn);
+});
+
+function selectColor(hex,sourceBtn){
+  selectedColor=hex.toUpperCase();
+  erasing=false;
+  document.getElementById('eraser-btn').classList.remove('active');
+  document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));
+  if(sourceBtn)sourceBtn.classList.add('active');
+  document.getElementById('hex-input').value=selectedColor;
+  document.getElementById('custom-swatch').style.background=selectedColor;
+  try{document.getElementById('custom-color-input').value=selectedColor;}catch(e){}
+}
+
+// custom swatch click → open picker
+document.getElementById('custom-swatch').addEventListener('click',()=>{
+  document.getElementById('custom-color-input').click();
+});
+
+document.getElementById('custom-color-input').addEventListener('input',function(){
+  const hex=this.value.toUpperCase();
+  document.getElementById('custom-swatch').style.background=hex;
+  document.getElementById('hex-input').value=hex;
+  selectColor(hex,null);
+});
+
+const hexInp=document.getElementById('hex-input');
+hexInp.addEventListener('focus',function(){this.select();});
+hexInp.addEventListener('input',function(){
+  let v=this.value.trim();
+  if(!v.startsWith('#'))v='#'+v;
+  this.value=v.toUpperCase();
+  if(/^#[0-9A-Fa-f]{6}$/.test(v)){
+    document.getElementById('custom-swatch').style.background=v;
+    try{document.getElementById('custom-color-input').value=v;}catch(e){}
+    selectColor(v,null);
+  }
+});
+hexInp.addEventListener('keydown',e=>{if(e.key==='Enter')hexInp.blur();});
+
+document.getElementById('eraser-btn').addEventListener('click',function(){
+  erasing=!erasing;
+  this.classList.toggle('active',erasing);
+  if(erasing)document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));
+});
+
+document.getElementById('clear-btn').addEventListener('click',()=>{
+  if(!confirm('전체를 지울까요?'))return;
+  initData();buildGrid();
+});
+
+const sizeSelect=document.getElementById('size-select');
+sizeSelect.addEventListener('change',function(){
+  const[c,r]=this.value.split(',').map(Number);cols=c;totalRows=r;initData();buildGrid();
+});
+
+document.getElementById('download-btn').addEventListener('click',function(){
+  const btn=this;btn.textContent='저장 중...';btn.style.pointerEvents='none';
+  const cw=(HEADER_W+cols*CELL_W+2)*SCALE,ch=(HEADER_H+totalRows*CELL_H+2)*SCALE;
+  const canvas=document.createElement('canvas');canvas.width=cw;canvas.height=ch;
+  const ctx=canvas.getContext('2d');ctx.scale(SCALE,SCALE);
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,cw,ch);
+  const ox=1,oy=1;
+  ctx.fillStyle='#e8e8e8';ctx.fillRect(ox,oy,HEADER_W,HEADER_H);
+  for(let c=0;c<cols;c++){
+    const x=ox+HEADER_W+c*CELL_W;
+    ctx.fillStyle='#e8e8e8';ctx.fillRect(x,oy,CELL_W,HEADER_H);
+    ctx.strokeStyle=SOLID;ctx.lineWidth=0.5;ctx.setLineDash([]);ctx.strokeRect(x+.5,oy+.5,CELL_W-1,HEADER_H-1);
+    ctx.fillStyle='#555';ctx.font='9px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(String(c+1),x+CELL_W/2,oy+HEADER_H/2);
+  }
+  for(let r=0;r<totalRows;r++){
+    const y=oy+HEADER_H+r*CELL_H,isOdd=r%2===0;
+    ctx.fillStyle='#e8e8e8';ctx.fillRect(ox,y,HEADER_W,CELL_H);
+    ctx.strokeStyle=SOLID;ctx.lineWidth=0.5;ctx.setLineDash([]);ctx.strokeRect(ox+.5,y+.5,HEADER_W-1,CELL_H-1);
+    ctx.fillStyle='#555';ctx.font='bold 10px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(ALPHA[r],ox+HEADER_W/2,y+CELL_H/2);
+    for(let c=0;c<cols;c++){
+      const x=ox+HEADER_W+c*CELL_W;
+      ctx.fillStyle=gridData[r][c]||'#fff';ctx.fillRect(x,y,CELL_W,CELL_H);
+      ctx.strokeStyle=SOLID;ctx.lineWidth=0.5;ctx.setLineDash([]);
+      ctx.beginPath();ctx.moveTo(x+.5,y);ctx.lineTo(x+.5,y+CELL_H);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(x+CELL_W-.5,y);ctx.lineTo(x+CELL_W-.5,y+CELL_H);ctx.stroke();
+      if(isOdd){
+        ctx.strokeStyle=SOLID;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x,y+.5);ctx.lineTo(x+CELL_W,y+.5);ctx.stroke();
+        ctx.strokeStyle=DASHED;ctx.setLineDash([3,2]);ctx.beginPath();ctx.moveTo(x,y+CELL_H-.5);ctx.lineTo(x+CELL_W,y+CELL_H-.5);ctx.stroke();ctx.setLineDash([]);
+      }else{
+        ctx.strokeStyle=SOLID;ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x,y+CELL_H-.5);ctx.lineTo(x+CELL_W,y+CELL_H-.5);ctx.stroke();
+      }
+    }
+  }
+  const label=sizeSelect.options[sizeSelect.selectedIndex].text.split('—')[0].trim().replace(/×/g,'x').replace(/\s/g,'');
+  const link=document.createElement('a');link.download=`펜스아트클립_${label}.jpg`;
+  link.href=canvas.toDataURL('image/jpeg',0.95);link.click();
+  btn.textContent='⬇ JPG';btn.style.pointerEvents='';
+});
+
+function buildGrid(){
+  const table=document.getElementById('grid');table.innerHTML='';
+  const thead=document.createElement('tr');
+  const corner=document.createElement('th');corner.className='corner';
+  corner.style.cssText=`width:${HEADER_W}px;min-width:${HEADER_W}px;height:${HEADER_H}px;`;
+  thead.appendChild(corner);
+  for(let c=1;c<=cols;c++){
+    const th=document.createElement('th');th.className='col-header';th.textContent=c;
+    th.style.cssText=`width:${CELL_W}px;min-width:${CELL_W}px;height:${HEADER_H}px;`;thead.appendChild(th);
+  }
+  table.appendChild(thead);
+  for(let r=0;r<totalRows;r++){
+    const isOdd=r%2===0,bTop=isOdd?`1px solid ${SOLID}`:`none`,bBot=isOdd?`1px dashed ${DASHED}`:`1px solid ${SOLID}`;
+    const tr=document.createElement('tr');
+    const rh=document.createElement('td');rh.className='row-header';rh.textContent=ALPHA[r];
+    rh.style.cssText=`width:${HEADER_W}px;min-width:${HEADER_W}px;height:${CELL_H}px;border-left:1px solid ${SOLID};border-right:1px solid ${SOLID};border-top:${bTop};border-bottom:${bBot};`;
+    tr.appendChild(rh);
+    for(let c=0;c<cols;c++){
+      const td=document.createElement('td');td.className='cell-td';
+      td.style.cssText=`width:${CELL_W}px;min-width:${CELL_W}px;height:${CELL_H}px;border-left:1px solid ${SOLID};border-right:1px solid ${SOLID};border-top:${bTop};border-bottom:${bBot};`;
+      const cell=document.createElement('div');cell.className='clip-cell';
+      cell.style.cssText=`width:${CELL_W}px;height:${CELL_H}px;background:${gridData[r][c]||'transparent'};`;
+      cell.dataset.r=r;cell.dataset.c=c;
+      td.appendChild(cell);tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+  setupTouch();updateCount();
+}
+
+function paintCell(r,c){
+  const cell=document.querySelector(`.clip-cell[data-r="${r}"][data-c="${c}"]`);
+  if(!cell)return;
+  if(erasing){cell.style.background='transparent';gridData[r][c]='';}
+  else{cell.style.background=selectedColor;gridData[r][c]=selectedColor;}
+  updateCount();
+}
+
+function getCellFromPoint(x,y){
+  const el=document.elementFromPoint(x,y);
+  if(!el)return null;
+  const cell=el.closest?el.closest('.clip-cell'):null;
+  if(!cell)return null;
+  return{r:parseInt(cell.dataset.r),c:parseInt(cell.dataset.c)};
+}
+
+function setupTouch(){
+  const wrap=document.getElementById('grid-wrap');
+  const newWrap=wrap.cloneNode(false);
+  while(wrap.firstChild)newWrap.appendChild(wrap.firstChild);
+  wrap.parentNode.replaceChild(newWrap,wrap);
+  const w=document.getElementById('grid-wrap');
+
+  w.addEventListener('mousedown',e=>{
+    const cell=e.target.closest('.clip-cell');if(!cell)return;
+    painting=true;paintCell(parseInt(cell.dataset.r),parseInt(cell.dataset.c));
+  });
+  w.addEventListener('mouseover',e=>{
+    if(!painting)return;
+    const cell=e.target.closest('.clip-cell');if(!cell)return;
+    paintCell(parseInt(cell.dataset.r),parseInt(cell.dataset.c));
+  });
+  document.addEventListener('mouseup',()=>{painting=false;});
+
+  w.addEventListener('touchstart',e=>{
+    const t=e.touches[0],pos=getCellFromPoint(t.clientX,t.clientY);
+    if(!pos)return;painting=true;w.classList.add('drawing');paintCell(pos.r,pos.c);
+  },{passive:true});
+  w.addEventListener('touchmove',e=>{
+    if(!painting)return;e.preventDefault();
+    const t=e.touches[0],pos=getCellFromPoint(t.clientX,t.clientY);
+    if(pos)paintCell(pos.r,pos.c);
+  },{passive:false});
+  w.addEventListener('touchend',()=>{painting=false;w.classList.remove('drawing');});
+}
+
+function updateCount(){
+  const counts={};
+  for(let r=0;r<totalRows;r++)for(let c=0;c<cols;c++)if(gridData[r][c])counts[gridData[r][c]]=(counts[gridData[r][c]]||0)+1;
+  const bar=document.getElementById('bottom-bar');
+  const items=Object.entries(counts).map(([hex,n])=>
+    `<span class="count-item"><span class="count-dot" style="background:${hex};${hex.toUpperCase()==='#FFFFFF'?'border:1px solid #ccc;':''}"></span><span>${hex} ${n}</span></span>`
+  ).join('');
+  bar.innerHTML=items||'<span style="color:#aaa;">셀을 터치해서 색칠하세요</span>';
+}
+
+initData();buildGrid();
+</script>
+</body>
+</html>
